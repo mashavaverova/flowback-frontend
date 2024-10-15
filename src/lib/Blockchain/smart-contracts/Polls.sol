@@ -1,174 +1,215 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity ^0.8.0;
+pragma solidity 0.8.18;
 
-import {RightToVote} from './RightToVote.sol';
-import {Delegations} from './Delegations.sol';
-import {PollHelpers} from './PollHelpers.sol';
-import {ProposalHelpers} from './ProposalHelpers.sol';
-import {Predictions} from './Predictions.sol';
-import {PredictionHelpers} from './PredictionHelpers.sol';
-import {PredictionBetHelpers} from './PredictionBetHelpers.sol';
-import {PredictionBets} from './PredictionBets.sol';
+import {RightToVote} from "./RightToVote.sol";
+import {Delegations} from "./Delegations.sol";
+import {PollHelpers} from "./PollHelpers.sol";
+import {ProposalHelpers} from "./ProposalHelpers.sol";
+import {Predictions} from "./Predictions.sol";
+import {PredictionHelpers} from "./PredictionHelpers.sol";
+import {PredictionBetHelpers} from "./PredictionBetHelpers.sol";
+import {PredictionBets} from "./PredictionBets.sol";
+import "lib/forge-std/src/console.sol";
 
-// Contract needs to be deployed with the optimizer
+import "lib/forge-std/src/console.sol";
 
-contract Polls is RightToVote, Delegations, PollHelpers, ProposalHelpers, PredictionHelpers, Predictions, PredictionBetHelpers, PredictionBets {
+/**
+ * @title Polls
+ * @dev This contract manages the creation and voting of polls, leveraging multiple helper contracts for additional functionalities.
+ * @notice Users can create polls, submit votes, and manage group memberships within this contract.
+ * @author @EllenLng, @KristofferGW
+ * @notice Audited by @MashaVaverova
+ */
+contract Polls is
+    RightToVote,
+    Delegations,
+    PollHelpers,
+    ProposalHelpers,
+    PredictionHelpers,
+    Predictions,
+    PredictionBetHelpers,
+    PredictionBets
+{
+    event PollCreated(uint256 indexed pollId, string title);
+    event VoteSubmitted(uint256 indexed pollId, address indexed voter, uint256 votesForProposal);
 
-    event PollCreated(uint pollId, string title);
+    error P_UserNotMemberOfGroup(uint256 groupId, address user);
+    error P_AlreadyDelegatedVote(uint256 groupId, address voter);
+    error P_InvalidScore(uint256 score);
 
+    /**
+     * @notice Creates a new poll with specified parameters.
+     * @param _title The title of the poll.
+     * @param _tag A tag associated with the poll.
+     * @param _group The group ID associated with the poll.
+     * @param _pollStartDate The start date of the poll.
+     * @param _proposalEndDate The end date for proposal submissions.
+     * @param _votingStartDate The date when voting starts.
+     * @param _delegateEndDate The end date for delegation.
+     * @param _endDate The end date for the poll.
+     * @param _maxVoteScore The maximum score a user can give in the poll.
+     */
     function createPoll(
         string calldata _title,
         string calldata _tag,
-        uint _group,
-        uint _pollStartDate,
-        uint _proposalEndDate,
-        uint _votingStartDate, 
-        uint _delegateEndDate,
-        uint _endDate
-        ) public {
-            pollCount++;
+        uint256 _group,
+        uint256 _pollStartDate,
+        uint256 _proposalEndDate,
+        uint256 _votingStartDate,
+        uint256 _delegateEndDate,
+        uint256 _endDate,
+        uint8 _maxVoteScore
+    ) external {
+        requireMaxVoteScoreWithinRange(_maxVoteScore);
+        pollCount++;
 
-            Poll memory newPoll = Poll({
-                title: _title,
-                tag: _tag,
-                group: _group,
-                pollStartDate: _pollStartDate,
-                proposalEndDate: _proposalEndDate,
-                votingStartDate: _votingStartDate,
-                delegateEndDate: _delegateEndDate,
-                endDate: _endDate,
-                pollId: pollCount, 
-                proposalCount: 0
-            });
+        Poll memory newPoll = Poll({
+            title: _title,
+            tag: _tag,
+            group: _group,
+            pollStartDate: _pollStartDate,
+            proposalEndDate: _proposalEndDate,
+            votingStartDate: _votingStartDate,
+            delegateEndDate: _delegateEndDate,
+            endDate: _endDate,
+            maxVoteScore: _maxVoteScore,
+            pollId: pollCount,
+            proposalCount: 0
+        });
 
-            emit PollCreated(newPoll.pollId, newPoll.title);
-
-            polls[pollCount] = newPoll;
-        }
-
-    event ProposalAdded(uint indexed pollId, uint proposalId, string description);
-
-    function addProposal(uint _pollId, string calldata _description) public {
-        requirePollToExist(_pollId);
-        controlProposalEndDate(_pollId);
-        polls[_pollId].proposalCount++;
-        uint _proposalId = polls[_pollId].proposalCount;
-
-        proposals[_pollId].push(Proposal({
-            description: _description,
-            voteCount: 0,
-            proposalId: _proposalId,
-            predictionCount: 0
-        }));
-
-        emit ProposalAdded(_pollId, _proposalId, _description);
+        emit PollCreated(newPoll.pollId, newPoll.title);
+        polls[pollCount] = newPoll;
     }
 
-    function getProposals(uint _pollId) external view returns(Proposal[] memory) {
-        requirePollToExist(_pollId);
-        return proposals[_pollId];
+    /**
+     * @notice Allows a user to vote on a proposal in a specified poll.
+     * @param _pollId The ID of the poll to vote in.
+     * @param _proposalId The ID of the proposal being voted on.
+     * @param _score The score assigned to the vote.
+     */
+    function vote(uint256 _pollId, uint256 _proposalId, uint8 _score) external {
+        console.log("Voting initiated by:", msg.sender);
+
+        Poll storage poll = polls[_pollId];
+        require(poll.pollId > 0, "Poll does not exist");
+        console.log("Poll exists, title:", poll.title);
+
+        if (_score == 0) {
+            revert P_InvalidScore(_score);
+        }
+        console.log("Score is valid:", _score);
+
+        if (!isUserMemberOfGroup(poll.group)) {
+            revert P_UserNotMemberOfGroup(poll.group, msg.sender);
+        }
+        console.log("User is a member of the group:", msg.sender);
+
+        if (hasVoted(_pollId)) {
+            revert SH_AlreadyVoted(_pollId, msg.sender);
+        }
+        console.log("User has not yet voted in the poll");
+
+        if (hasDelegatedInGroup(poll.group)) {
+            revert P_AlreadyDelegatedVote(poll.group, msg.sender);
+        }
+        console.log("User has not delegated their vote");
+
+        // Retrieve the proposal using inherited getProposal
+        Proposal memory proposal = getProposal(_pollId, _proposalId);
+        console.log("Fetched proposal ID:", proposal.proposalId);
+
+        updateProposalVotes(_pollId, _proposalId, 1, _score); // Update the proposal
+
+        console.log("Vote successful. Updated vote count:", proposal.voteCount + 1);
+
+        votersForPoll[_pollId][msg.sender] = true;
+        emit VoteSubmitted(_pollId, msg.sender, proposal.voteCount + 1);
     }
 
-    function getPollResults(uint _pollId) public view returns (string[] memory, uint[] memory) {
-        requirePollToExist(_pollId);
+    /**
+     * @notice Allows a user to vote as a delegate on a proposal in a specified poll.
+     * @param _pollId The ID of the poll to vote in.
+     * @param _proposalId The ID of the proposal being voted on.
+     * @param _score The score assigned to the vote.
+     */
+    function voteAsDelegate(uint256 _pollId, uint256 _proposalId, uint8 _score) external {
+        console.log("Delegate voting initiated by:", msg.sender);
 
-        Proposal[] memory pollProposals = proposals[_pollId];
+        Poll storage poll = polls[_pollId];
+        require(poll.pollId > 0, "Poll does not exist");
+        console.log("Poll exists, title:", poll.title);
 
-        string[] memory proposalDescriptions = new string[](pollProposals.length);
-        uint[] memory voteCounts = new uint[](pollProposals.length);
+        uint256 delegatedVotingPower = _getDelegatedVotes(poll.group);
+        console.log("Delegated voting power for the user:", delegatedVotingPower);
 
-        for (uint i; i < pollProposals.length; i++) {
-            proposalDescriptions[i] = pollProposals[i].description;
-            voteCounts[i] = pollProposals[i].voteCount;
+        if (_score == 0) {
+            revert P_InvalidScore(_score);
         }
+        console.log("Score is valid:", _score);
 
-        return (proposalDescriptions, voteCounts);
+        if (!isUserMemberOfGroup(poll.group)) {
+            revert P_UserNotMemberOfGroup(poll.group, msg.sender);
+        }
+        console.log("User is a member of the group:", msg.sender);
 
+        if (hasVotedAsDelegate(_pollId)) {
+            revert SH_AlreadyVoted(_pollId, msg.sender);
+        }
+        console.log("User has not voted as a delegate");
+
+        if (hasDelegatedInGroup(poll.group)) {
+            revert P_AlreadyDelegatedVote(poll.group, msg.sender);
+        }
+        console.log("User has not delegated their vote in this group");
+
+        Proposal memory proposal = getProposal(_pollId, _proposalId);
+        console.log("Fetched proposal ID:", proposal.proposalId);
+
+        updateProposalVotes(_pollId, _proposalId, delegatedVotingPower, _score * delegatedVotingPower);
+
+        console.log("Before updating: voteCount =", proposal.voteCount);
+        console.log("After updating: voteCount =", proposal.voteCount + delegatedVotingPower);
+
+        delegateVotersForPoll[_pollId][msg.sender] = true;
+        emit VoteSubmitted(_pollId, msg.sender, proposal.voteCount + delegatedVotingPower);
     }
 
-    event VoteSubmitted(uint indexed pollId, address indexed voter, uint votesForProposal);
+    /**
+     * @notice Retrieves the total number of delegated votes for a user in a specified group.
+     * @param _group The ID of the group to check.
+     * @return totalVotes The total number of delegated votes for the user.
+     */
+    function _getDelegatedVotes(uint256 _group) internal view returns (uint256) {
+        uint256 totalVotes = 0;
+        GroupDelegate[] storage groupDelegatesList = groupDelegates[_group];
 
-    function vote(uint _pollId, uint _proposalId) public {
-        uint _pollGroup = polls[_pollId].group;
-        uint delegatedVotingPower;
-        address[] memory delegatingAddresses;
-
-        requirePollToExist(_pollId);
-
-        require(isUserMemberOfGroup(_pollId), "The user is not a member of poll group");
-
-        isVotingOpen(_pollId);
-        
-        require(!hasVoted(_pollId), "Vote has already been cast");
-
-        require(requireProposalToExist(_pollId, _proposalId));
-
-        require(!hasDelegatedInGroup(_pollGroup), "You have delegated your vote in the polls group.");
-
-        Proposal[] storage pollProposals = proposals[_pollId];
-
-        uint pollGroupLength = groupDelegates[_pollGroup].length;
-
-        for (uint i; i < pollGroupLength;) {
-            if (groupDelegates[_pollGroup][i].delegate == msg.sender) {
-                delegatedVotingPower = groupDelegates[_pollGroup][i].delegatedVotes;
-                delegatingAddresses = groupDelegates[_pollGroup][i]. delegationsFrom;
-            }
-            unchecked {
-                ++i;
+        for (uint256 i = 0; i < groupDelegatesList.length; i++) {
+            GroupDelegate storage delegate = groupDelegatesList[i];
+            if (delegate.delegate == msg.sender) {
+                totalVotes = delegate.delegatedVotes;
+                break;
             }
         }
-
-        for (uint i; i < delegatingAddresses.length; i++) {
-            uint pollDelegateEndDate = polls[_pollId].delegateEndDate;
-
-            for (uint j = 0; j < groupDelegationsByUser[delegatingAddresses[i]].length; j++) {
-                if (groupDelegationsByUser[delegatingAddresses[i]][j].groupId == _pollGroup) {
-                    if (groupDelegationsByUser[delegatingAddresses[i]][j].timeOfDelegation > pollDelegateEndDate) {
-                        delegatedVotingPower = delegatedVotingPower > 0 ? delegatedVotingPower - 1: 0;
-                    }
-                    break;
-                }
-            }
-        }
-
-        uint proposalsLength = pollProposals.length;
-
-        uint _votesForProposal;
-
-        for (uint i; i < proposalsLength;) {
-            if (pollProposals[i].proposalId == _proposalId) {
-                pollProposals[i].voteCount += delegatedVotingPower + 1;
-                _votesForProposal = pollProposals[i].voteCount;
-                votersForPoll[_pollId].push(msg.sender);
-                emit VoteSubmitted(_pollId, msg.sender, _votesForProposal);
-                return;
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        return;
+        return totalVotes;
     }
 
-    mapping(uint => address[]) internal votersForPoll;
-
-    function hasVoted(uint _pollId) internal view returns(bool voted) {
-        address[] memory addresses = votersForPoll[_pollId];
-
-        for (uint i; i < addresses.length;) {
-            if (addresses[i] == msg.sender) {
-                return true;
-            }
-            unchecked {
-                ++i;
-            }
-        }
-        return false;
+    /**
+     * @notice Checks if a user has voted in a specified poll.
+     * @param _pollId The ID of the poll to check.
+     * @param _user The address of the user to check.
+     * @return True if the user has voted, false otherwise.
+     */
+    function hasUserVoted(uint256 _pollId, address _user) public view returns (bool) {
+        return votersForPoll[_pollId][_user];
     }
 
-    function getPoll(uint _pollId) public view returns (Poll memory) {
-        requirePollToExist(_pollId);
-        return polls[_pollId];
+    /**
+     * @notice Checks if a user has voted as a delegate in a specified poll.
+     * @param _pollId The ID of the poll to check.
+     * @param _user The address of the user to check.
+     * @return True if the user has voted as a delegate, false otherwise.
+     */
+    function hasUserVotedAsDelegate(uint256 _pollId, address _user) public view returns (bool) {
+        return delegateVotersForPoll[_pollId][_user];
     }
 }
